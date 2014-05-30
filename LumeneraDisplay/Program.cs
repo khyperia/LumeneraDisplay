@@ -28,6 +28,8 @@ namespace LumeneraDisplay
             _snapshot = snapshot;
             _data = data;
             _width = width;
+
+            ResetSettings();
         }
 
         public static LumeneraCamera Create(int id)
@@ -41,7 +43,7 @@ namespace LumeneraDisplay
             var snapshot = new dll.LucamSnapshot
             {
                 BufferLastFrame = false,
-                Exposure = 500,
+                Exposure = 1000,
                 ExposureDelay = 0,
                 Format =
                 {
@@ -55,7 +57,7 @@ namespace LumeneraDisplay
                     SubSampleX = 1,
                     SubSampleY = 1
                 },
-                Gain = GetProperty(camera, dll.LucamProperty.AUTO_GAIN_MAXIMUM),
+                Gain = 4,
                 ShutterType = dll.LucamShutterType.GlobalShutter,
                 StrobeDelay = 0.1f,
                 StrobeFlags = 0,
@@ -128,12 +130,20 @@ namespace LumeneraDisplay
                 dll.LucamCameraClose(_handle);
             }
         }
+
+        private void ResetSettings()
+        {
+            api.SetProperty(_handle, dll.LucamProperty.GAMMA, 1.0f);
+            api.SetProperty(_handle, dll.LucamProperty.DIGITAL_GAIN, 1.0f);
+            api.SetProperty(_handle, dll.LucamProperty.CONTRAST, 1.0f);
+            api.SetProperty(_handle, dll.LucamProperty.BRIGHTNESS, 1.0f);
+        }
     }
 
     class Program
     {
         static LumeneraCamera _camera;
-        private static float _gamma = 1.0f;
+        private static float _digitalGain = 1.0f;
         private static float _liveExposure = 1.0f;
         private static float _saveExposure = 1.0f;
         private static string _savedir;
@@ -172,7 +182,7 @@ namespace LumeneraDisplay
                             ImageSaver.Save(_savedir, _camera.Data, _camera.Width);
                             Console.WriteLine("Saved image, {0} to go", _save);
                         }
-                        DisplayWindow.Set(_camera.Data, _camera.Width, _gamma);
+                        DisplayWindow.Set(_camera.Data, _camera.Width, _digitalGain);
                     }
                     else
                         Thread.Sleep(1000);
@@ -180,7 +190,7 @@ namespace LumeneraDisplay
             }) { IsBackground = true }.Start();
             while (true)
             {
-                Console.WriteLine("Commands: connect, cross, gamma, gain, exposure, save, saveexp, savedir");
+                Console.WriteLine("Commands: connect, cross, gain, digitalgain, exposure, save, saveexp, savedir");
                 Console.Write("> ");
                 var readLine = Console.ReadLine();
                 if (readLine == null)
@@ -199,12 +209,12 @@ namespace LumeneraDisplay
                     case "cross":
                         DisplayWindow.Cross = !DisplayWindow.Cross;
                         break;
-                    case "gamma":
-                        float resultGamma;
-                        if (line.Length == 2 && float.TryParse(line[1], out resultGamma))
-                            _gamma = resultGamma;
+                    case "digitalgain":
+                        float resultDigitalGain;
+                        if (line.Length == 2 && float.TryParse(line[1], out resultDigitalGain))
+                            _digitalGain = resultDigitalGain;
                         else
-                            Console.WriteLine("Bad gamma command, syntax: gamma [multiplier]");
+                            Console.WriteLine("Bad digitalgain command, syntax: digitalgain [multiplier]");
                         break;
                     case "gain":
                         float resultGain;
@@ -350,7 +360,7 @@ namespace LumeneraDisplay
 
         public static bool Cross { get; set; }
 
-        public static void Set(ushort[] data, int width, float gamma)
+        public static void Set(ushort[] data, int width, float digitalGain)
         {
             if (_fetch == null)
             {
@@ -365,7 +375,7 @@ namespace LumeneraDisplay
                 var locked = _fetch._bitmap.LockBits(new Rectangle(0, 0, _fetch._bitmap.Width, _fetch._bitmap.Height), ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
                 Marshal.Copy(Array.ConvertAll(data, u =>
                 {
-                    var valueInt = (int)(u * gamma * byte.MaxValue / ushort.MaxValue);
+                    var valueInt = (int)(u * digitalGain * byte.MaxValue / ushort.MaxValue);
                     var value = (byte)(valueInt > byte.MaxValue ? byte.MaxValue : valueInt);
                     return value << 16 | value << 8 | value;
                 }), 0, locked.Scan0, data.Length);

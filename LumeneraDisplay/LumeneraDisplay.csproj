@@ -34,7 +34,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Reference Include="lumenera.api">
-      <HintPath>Lumenera\lumenera.api.dll</HintPath>
+      <HintPath>..\lumenera.api.dll</HintPath>
     </Reference>
     <Reference Include="PresentationCore" />
     <Reference Include="System" />
