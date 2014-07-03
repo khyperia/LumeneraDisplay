@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
@@ -143,7 +144,6 @@ namespace LumeneraDisplay
     class Program
     {
         static LumeneraCamera _camera;
-        private static float _digitalGain = 1.0f;
         private static float _liveExposure = 1.0f;
         private static float _saveExposure = 1.0f;
         private static string _savedir;
@@ -182,7 +182,7 @@ namespace LumeneraDisplay
                             ImageSaver.Save(_savedir, _camera.Data, _camera.Width);
                             Console.WriteLine("Saved image, {0} to go", _save);
                         }
-                        DisplayWindow.Set(_camera.Data, _camera.Width, _digitalGain);
+                        DisplayWindow.Set(_camera.Data, _camera.Width);
                     }
                     else
                         Thread.Sleep(1000);
@@ -190,7 +190,7 @@ namespace LumeneraDisplay
             }) { IsBackground = true }.Start();
             while (true)
             {
-                Console.WriteLine("Commands: connect, cross, gain, digitalgain, exposure, save, saveexp, savedir");
+                Console.WriteLine("Commands: connect, cross, zoom, gain, stretch, exposure, save, saveexp, savedir");
                 Console.Write("> ");
                 var readLine = Console.ReadLine();
                 if (readLine == null)
@@ -209,12 +209,14 @@ namespace LumeneraDisplay
                     case "cross":
                         DisplayWindow.Cross = !DisplayWindow.Cross;
                         break;
-                    case "digitalgain":
-                        float resultDigitalGain;
-                        if (line.Length == 2 && float.TryParse(line[1], out resultDigitalGain))
-                            _digitalGain = resultDigitalGain;
+                    case "zoom":
+                        int newZoom;
+                        if (line.Length == 2 && int.TryParse(line[1], out newZoom) && newZoom > 0)
+                            DisplayWindow.Zoom = newZoom;
+                        else if (DisplayWindow.Zoom == 0)
+                            DisplayWindow.Zoom = 80;
                         else
-                            Console.WriteLine("Bad digitalgain command, syntax: digitalgain [multiplier]");
+                            DisplayWindow.Zoom = 0;
                         break;
                     case "gain":
                         float resultGain;
@@ -222,6 +224,15 @@ namespace LumeneraDisplay
                             _camera.Gain = resultGain;
                         else
                             Console.WriteLine("Bad gain command, syntax: gain [number]");
+                        break;
+                    case "stretch":
+                        double newStretch;
+                        if (line.Length == 2 && double.TryParse(line[1], out newStretch) && newStretch > 0)
+                            DisplayWindow.AutoStretchAmount = newStretch;
+                        else if (DisplayWindow.AutoStretchAmount <= 0)
+                            DisplayWindow.AutoStretchAmount = 0.5;
+                        else
+                            DisplayWindow.AutoStretchAmount = 0;
                         break;
                     case "exposure":
                         float resultExposure;
@@ -332,7 +343,7 @@ namespace LumeneraDisplay
             lock (_lock)
             {
                 var clientSize = ClientSize;
-                if (clientSize.Width >= _bitmap.Width && Height >= _bitmap.Height)
+                if (clientSize.Width >= _bitmap.Width && Height >= _bitmap.Height && Zoom <= 0)
                 {
                     height = _bitmap.Height;
                     width = _bitmap.Width;
@@ -344,11 +355,16 @@ namespace LumeneraDisplay
                 {
                     height = Math.Min(clientSize.Height, clientSize.Width * _bitmap.Height / _bitmap.Width);
                     width = height * _bitmap.Width / _bitmap.Height;
-                    e.Graphics.DrawImage(_bitmap, 0, 0, width, height);
+                    if (Zoom > 0)
+                        e.Graphics.DrawImage(_bitmap, new Rectangle(0, 0, width, height),
+                            new Rectangle(_bitmap.Width / 2 - Zoom, _bitmap.Height / 2 - Zoom, Zoom * 2, Zoom * 2),
+                            GraphicsUnit.Pixel);
+                    else
+                        e.Graphics.DrawImage(_bitmap, 0, 0, width, height);
                     if (height == clientSize.Height)
                         e.Graphics.FillRectangle(_fillBrush, width, 0, clientSize.Width - width, clientSize.Height);
                     else
-                        e.Graphics.FillRectangle(_fillBrush, 0, width, clientSize.Width, clientSize.Height - height);
+                        e.Graphics.FillRectangle(_fillBrush, 0, height, clientSize.Width, clientSize.Height - height);
                 }
             }
             if (Cross)
@@ -359,8 +375,10 @@ namespace LumeneraDisplay
         }
 
         public static bool Cross { get; set; }
+        public static double AutoStretchAmount { get; set; }
+        public static int Zoom { get; set; }
 
-        public static void Set(ushort[] data, int width, float digitalGain)
+        public static void Set(ushort[] data, int width)
         {
             if (_fetch == null)
             {
@@ -370,15 +388,33 @@ namespace LumeneraDisplay
                 };
                 new Thread(() => _fetch.ShowDialog()) { IsBackground = true }.Start();
             }
+            int[] dataConvert;
+            if (AutoStretchAmount > 0)
+            {
+                var dataSort = new ushort[data.Length];
+                Array.Copy(data, dataSort, data.Length);
+                Array.Sort(dataSort);
+                dataConvert = Array.ConvertAll(data, value =>
+                {
+                    var index = (double)Array.BinarySearch(dataSort, value) / dataSort.Length;
+                    var val = (double)value / dataSort[dataSort.Length - 1];
+                    val = val * (1 - AutoStretchAmount) + index * AutoStretchAmount;
+                    var final = (byte)(Math.Max(Math.Min(val, 1), 0) * byte.MaxValue);
+                    return final << 16 | final << 8 | final;
+                });
+            }
+            else
+            {
+                dataConvert = Array.ConvertAll(data, u =>
+                {
+                    var value = (byte)(u * byte.MaxValue / ushort.MaxValue);
+                    return value << 16 | value << 8 | value;
+                });
+            }
             lock (_fetch._lock)
             {
                 var locked = _fetch._bitmap.LockBits(new Rectangle(0, 0, _fetch._bitmap.Width, _fetch._bitmap.Height), ImageLockMode.WriteOnly, System.Drawing.Imaging.PixelFormat.Format32bppRgb);
-                Marshal.Copy(Array.ConvertAll(data, u =>
-                {
-                    var valueInt = (int)(u * digitalGain * byte.MaxValue / ushort.MaxValue);
-                    var value = (byte)(valueInt > byte.MaxValue ? byte.MaxValue : valueInt);
-                    return value << 16 | value << 8 | value;
-                }), 0, locked.Scan0, data.Length);
+                Marshal.Copy(dataConvert, 0, locked.Scan0, data.Length);
                 _fetch._bitmap.UnlockBits(locked);
                 _fetch.BeginInvoke((Action)_fetch.Invalidate);
             }
